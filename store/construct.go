@@ -237,6 +237,110 @@ func dbString(dbFile string) ([]string, []string) {
 	return seqhashes, seqs
 }
 
+func SearchDatabase(dbFile string, search string) []string {
+	db, err := sql.Open("sqlite3", dbFile)
+	checkErr(err)
+	// Here be dragons
+	rows, _ := db.Query(`WITH RECURSIVE lcp_find(initial_position, upper_bound, lower_bound, lcp) AS
+(
+  SELECT (WITH recursive suffix_search(search_string, compare_string, pos, upper_limit, lower_limit, ct) AS
+(
+       SELECT ?,
+              (
+                       SELECT   group_concat(letter,'')
+                       FROM     suffix_array_sequence
+                       WHERE    position>(SELECT num FROM suffix_array WHERE position=(SELECT max(position)/2 FROM suffix_array))
+                       AND      position<((SELECT num FROM suffix_array WHERE position=(SELECT max(position)/2 FROM suffix_array))+length(?)+1)
+                       ORDER BY position ASC),
+              max(position)/2,
+              max(position),
+              0, 0
+       FROM   suffix_array
+       UNION ALL
+       SELECT search_string,
+              (
+                       SELECT   group_concat(letter,'')
+                       FROM     suffix_array_sequence
+                       WHERE    position>(SELECT num FROM suffix_array WHERE position=pos)
+                       AND      position<((SELECT num FROM suffix_array WHERE position=pos)+length(search_string)+1)
+                       ORDER BY position ASC) AS compare_string,
+              CASE
+                     WHEN search_string < (
+                       SELECT   group_concat(letter,'')
+                       FROM     suffix_array_sequence
+                       WHERE    position>(SELECT num FROM suffix_array WHERE position=pos)
+                       AND      position<((SELECT num FROM suffix_array WHERE position=pos)+length(search_string)+1)
+                       ORDER BY position ASC) THEN pos-((pos-lower_limit)/2)
+                     WHEN search_string > (
+                       SELECT   group_concat(letter,'')
+                       FROM     suffix_array_sequence
+                       WHERE    position>(SELECT num FROM suffix_array WHERE position=pos)
+                       AND      position<((SELECT num FROM suffix_array WHERE position=pos)+length(search_string)+1)
+                       ORDER BY position ASC) THEN pos+((upper_limit-pos)/2)
+                     ELSE pos
+              END pos,
+              CASE
+                     WHEN search_string < (
+                       SELECT   group_concat(letter,'')
+                       FROM     suffix_array_sequence
+                       WHERE    position>(SELECT num FROM suffix_array WHERE position=pos)
+                       AND      position<((SELECT num FROM suffix_array WHERE position=pos)+length(search_string)+1)
+                       ORDER BY position ASC) THEN pos
+                     WHEN search_string > (
+                       SELECT   group_concat(letter,'')
+                       FROM     suffix_array_sequence
+                       WHERE    position>(SELECT num FROM suffix_array WHERE position=pos)
+                       AND      position<((SELECT num FROM suffix_array WHERE position=pos)+length(search_string)+1)
+                       ORDER BY position ASC) THEN upper_limit
+                     ELSE upper_limit
+              END upper_limit,
+              CASE
+                     WHEN search_string < (
+                       SELECT   group_concat(letter,'')
+                       FROM     suffix_array_sequence
+                       WHERE    position>(SELECT num FROM suffix_array WHERE position=pos)
+                       AND      position<((SELECT num FROM suffix_array WHERE position=pos)+length(search_string)+1)
+                       ORDER BY position ASC) THEN lower_limit
+                     WHEN search_string > (
+                       SELECT   group_concat(letter,'')
+                       FROM     suffix_array_sequence
+                       WHERE    position>(SELECT num FROM suffix_array WHERE position=pos)
+                       AND      position<((SELECT num FROM suffix_array WHERE position=pos)+length(search_string)+1)
+                       ORDER BY position ASC) THEN pos
+                     ELSE lower_limit
+              END lower_limit,
+  ct+1
+       FROM   suffix_search
+       WHERE  search_string != compare_string AND ct<40 )
+SELECT pos
+FROM   suffix_search ORDER BY ct DESC limit 1), 0, 0, ?
+  UNION ALL
+  SELECT initial_position, 
+  CASE 
+  	WHEN (SELECT lcp FROM suffix_array WHERE position = initial_position+upper_bound) >= lcp THEN upper_bound+1 ELSE upper_bound END upper_bound,
+  CASE
+    WHEN initial_position-lower_bound = 0 THEN lower_bound
+  	WHEN (SELECT lcp FROM suffix_array WHERE position = initial_position-lower_bound) >= lcp THEN lower_bound+1 ELSE lower_bound END lower_bound,
+  lcp
+  FROM lcp_find
+  WHERE ((SELECT lcp FROM suffix_array WHERE position = initial_position+upper_bound) >= lcp OR (SELECT lcp FROM suffix_array WHERE position = initial_position-lower_bound) >= lcp )
+  )
+SELECT DISTINCT(sp.seqhash_id) as seqhash FROM suffix_array as sa
+LEFT JOIN sequence_positions AS sp ON sp.seq_start <= sa.num AND sp.seq_end >= sa.num
+WHERE (sa.position <= (SELECT max(initial_position) FROM lcp_find) + (SELECT max(upper_bound) FROM lcp_find) - 1 
+AND sa.position >= (SELECT max(initial_position) FROM lcp_find) - (SELECT max(lower_bound) FROM lcp_find))
+OR sa.position = (SELECT max(initial_position) FROM lcp_find)
+   ;
+  `, search, search, len(search))
+	output := []string{}
+	var seqhash string
+	for rows.Next() {
+		rows.Scan(&seqhash)
+		output = append(output, seqhash)
+	}
+	return output
+}
+
 func main() {
 	// Init db
 	t := "test.db"
@@ -257,4 +361,5 @@ func main() {
 	if err != nil {
 		fmt.Println(err)
 	}
+	fmt.Print(SearchDatabase("test.db", "ccccgggtaccgagctcgaattcactggcc"))
 }
