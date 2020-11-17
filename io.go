@@ -1,4 +1,4 @@
-package main
+package poly
 
 import (
 	"bytes"
@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/mitchellh/go-wordwrap"
 )
 
 /******************************************************************************
@@ -16,105 +18,117 @@ import (
 File is structured as so:
 
 Structs:
-	AnnotatedSequence - main struct for sequence handling plus sub structs.
+	Sequence - main struct for sequence handling plus sub structs.
 
-File specific parsers, readers, writers, and builders:
-	Gff - parser, reader, writer, builder
-	Gbk/gb/genbank - parser, reader
-	JSON- reader, writer
+File specific parsers, builders readers, and writers:
+	Gff - parser, builder, reader, writer
+	JSON- parser, reader, writer
+	FASTA - parser, reader, writer
+	Gbk/gb/genbank - parser, builder, reader, writer
+
 
 ******************************************************************************/
 
 /******************************************************************************
 
-AnnotatedSequence related structs begin here.
+Sequence related structs begin here.
 
 ******************************************************************************/
 
-// Meta Holds all the meta information of an AnnotatedSequence struct.
+// Meta Holds all the meta information of an Sequence struct.
 type Meta struct {
-	Name            string
-	GffVersion      string
-	RegionStart     int
-	RegionEnd       int
-	Size            int
-	Type            string
-	GenbankDivision string
-	Date            string
-	Definition      string
-	Accession       string
-	Version         string
-	Keywords        string
-	Organism        string
-	Source          string
-	Origin          string
-	Locus           Locus
-	References      []Reference
-	Primaries       []Primary
+	Name        string            `json:"name"`
+	GffVersion  string            `json:"gff_version"`
+	RegionStart int               `json:"region_start"`
+	RegionEnd   int               `json:"region_end"`
+	Size        int               `json:"size"`
+	Type        string            `json:"type"`
+	Date        string            `json:"date"`
+	Definition  string            `json:"definition"`
+	Accession   string            `json:"accession"`
+	Version     string            `json:"version"`
+	Keywords    string            `json:"keywords"`
+	Organism    string            `json:"organism"`
+	Source      string            `json:"source"`
+	Origin      string            `json:"origin"`
+	Locus       Locus             `json:"locus"`
+	References  []Reference       `json:"references"`
+	Other       map[string]string `json:"other"`
 }
-
-// Primary Holds all the Primary information of a Meta struct.
-type Primary struct {
-	RefSeq, PrimaryIdentifier, Primary_Span, Comp string
-}
-
-// genbank specific
-// type Reference struct {
-// 	Authors []string
-// 	Title   string
-// 	Journal string
-// 	PubMed  string
-// }
 
 // Reference holds information one reference in a Meta struct.
 type Reference struct {
-	Index, Authors, Title, Journal, PubMed, Remark, Range string
+	Index   string `json:"index"`
+	Authors string `json:"authors"`
+	Title   string `json:"title"`
+	Journal string `json:"journal"`
+	PubMed  string `json:"pub_med"`
+	Remark  string `json:"remark"`
+	Range   string `json:"range"`
 }
 
 // Locus holds Locus information in a Meta struct.
 type Locus struct {
-	Name, SequenceLength, MoleculeType, GenBankDivision, ModDate, SequenceCoding string
-	Circular                                                                     bool
+	Name             string `json:"name"`
+	SequenceLength   string `json:"sequence_length"`
+	MoleculeType     string `json:"molecule_type"`
+	GenbankDivision  string `json:"genbank_division"`
+	ModificationDate string `json:"modification_date"`
+	SequenceCoding   string `json:"sequence_coding"`
+	Circular         bool   `json:"circular"`
+	Linear           bool   `json:"linear"`
+}
+
+// Location holds nested location info for sequence region.
+type Location struct {
+	Start             int        `json:"start"`
+	End               int        `json:"end"`
+	Complement        bool       `json:"complement"`
+	Join              bool       `json:"join"`
+	FivePrimePartial  bool       `json:"five_prime_partial"`
+	ThreePrimePartial bool       `json:"three_prime_partial"`
+	SubLocations      []Location `json:"sub_locations"`
 }
 
 // Feature holds a single annotation in a struct. from https://github.com/blachlylab/gff3/blob/master/gff3.go
 type Feature struct {
 	Name string //Seqid in gff, name in gbk
 	//gff specific
-	Source            string
-	Type              string
-	Start             int
-	End               int
-	Complement        bool
-	FivePrimePartial  bool
-	ThreePrimePartial bool
-	Score             string
-	Strand            string
-	Phase             string
-	Attributes        map[string]string // Known as "qualifiers" for gbk, "attributes" for gff.
-	//gbk specific
-	Location string
-	Sequence string
+	Source               string            `json:"source"`
+	Type                 string            `json:"type"`
+	Score                string            `json:"score"`
+	Strand               string            `json:"strand"`
+	Phase                string            `json:"phase"`
+	Attributes           map[string]string `json:"attributes"`
+	GbkLocationString    string            `json:"gbk_location_string"`
+	Sequence             string            `json:"sequence"`
+	SequenceLocation     Location          `json:"sequence_location"`
+	SequenceHash         string            `json:"sequence_hash"`
+	Description          string            `json:"description"`
+	SequenceHashFunction string            `json:"hash_function"`
+	ParentSequence       *Sequence         `json:"-"`
 }
 
-// Sequence holds raw sequence information in an AnnotatedSequence struct.
+// Sequence holds all sequence information in a single struct.
 type Sequence struct {
-	Description  string
-	Hash         string
-	HashFunction string
-	Sequence     string
+	Meta                 Meta      `json:"meta"`
+	Description          string    `json:"description"`
+	SequenceHash         string    `json:"sequence_hash"`
+	SequenceHashFunction string    `json:"hash_function"`
+	Sequence             string    `json:"sequence"`
+	Features             []Feature `json:"features"`
 }
 
-// AnnotatedSequence holds all sequence information in a single struct.
-type AnnotatedSequence struct {
-	Meta     Meta
-	Features []Feature
-	Sequence Sequence
+// AddFeature is the canonical way to add a Feature into a Sequence struct. Appending a Feature struct directly to Sequence.Feature's will break .GetSequence() method.
+func (sequence *Sequence) AddFeature(feature Feature) []Feature {
+	feature.ParentSequence = sequence
+	sequence.Features = append(sequence.Features, feature)
+	return sequence.Features
 }
 
 /******************************************************************************
 
-AnnotatedSequence related structs end here.
+Sequence related structs end here.
 
 ******************************************************************************/
 
@@ -124,8 +138,12 @@ GFF specific IO related things begin here.
 
 ******************************************************************************/
 
-// ParseGff Takes in a string representing a gffv3 file and parses it into an AnnotatedSequence object.
-func ParseGff(gff string) AnnotatedSequence {
+// ParseGff Takes in a string representing a gffv3 file and parses it into an Sequence object.
+func ParseGff(file []byte) Sequence {
+
+	gff := string(file)
+	sequence := Sequence{}
+
 	lines := strings.Split(gff, "\n")
 	metaString := lines[0:2]
 	versionString := metaString[0]
@@ -138,8 +156,6 @@ func ParseGff(gff string) AnnotatedSequence {
 	meta.RegionEnd, _ = strconv.Atoi(regionStringArray[3])
 	meta.Size = meta.RegionEnd - meta.RegionStart
 
-	records := []Feature{}
-	sequence := Sequence{}
 	var sequenceBuffer bytes.Buffer
 	fastaFlag := false
 	for _, line := range lines {
@@ -160,8 +176,12 @@ func ParseGff(gff string) AnnotatedSequence {
 			record.Name = fields[0]
 			record.Source = fields[1]
 			record.Type = fields[2]
-			record.Start, _ = strconv.Atoi(fields[3])
-			record.End, _ = strconv.Atoi(fields[4])
+
+			// Indexing starts at 1 for gff so we need to shift down for Sequence 0 index.
+			record.SequenceLocation.Start, _ = strconv.Atoi(fields[3])
+			record.SequenceLocation.Start--
+			record.SequenceLocation.End, _ = strconv.Atoi(fields[4])
+
 			record.Score = fields[5]
 			record.Strand = fields[6]
 			record.Phase = fields[7]
@@ -176,25 +196,22 @@ func ParseGff(gff string) AnnotatedSequence {
 				value := attributeSplit[1]
 				record.Attributes[key] = value
 			}
-			records = append(records, record)
+			sequence.AddFeature(record)
 		}
 	}
 	sequence.Sequence = sequenceBuffer.String()
-	annotatedSequence := AnnotatedSequence{}
-	annotatedSequence.Meta = meta
-	annotatedSequence.Features = records
-	annotatedSequence.Sequence = sequence
+	sequence.Meta = meta
 
-	return annotatedSequence
+	return sequence
 }
 
 // BuildGff takes an Annotated sequence and returns a byte array representing a gff to be written out.
-func BuildGff(annotatedSequence AnnotatedSequence) []byte {
+func BuildGff(sequence Sequence) []byte {
 	var gffBuffer bytes.Buffer
 
 	var versionString string
-	if annotatedSequence.Meta.GffVersion != "" {
-		versionString = "##gff-version " + annotatedSequence.Meta.GffVersion + "\n"
+	if sequence.Meta.GffVersion != "" {
+		versionString = "##gff-version " + sequence.Meta.GffVersion + "\n"
 	} else {
 		versionString = "##gff-version 3 \n"
 	}
@@ -205,30 +222,30 @@ func BuildGff(annotatedSequence AnnotatedSequence) []byte {
 	var start string
 	var end string
 
-	if annotatedSequence.Meta.Name != "" {
-		name = annotatedSequence.Meta.Name
-	} else if annotatedSequence.Meta.Locus.Name != "" {
-		name = annotatedSequence.Meta.Locus.Name
-	} else if annotatedSequence.Meta.Accession != "" {
-		name = annotatedSequence.Meta.Accession
+	if sequence.Meta.Name != "" {
+		name = sequence.Meta.Name
+	} else if sequence.Meta.Locus.Name != "" {
+		name = sequence.Meta.Locus.Name
+	} else if sequence.Meta.Accession != "" {
+		name = sequence.Meta.Accession
 	} else {
 		name = "unknown"
 	}
 
-	if annotatedSequence.Meta.RegionStart != 0 {
-		start = strconv.Itoa(annotatedSequence.Meta.RegionStart)
+	if sequence.Meta.RegionStart != 0 {
+		start = strconv.Itoa(sequence.Meta.RegionStart)
 	} else {
 		start = "1"
 	}
 
-	if annotatedSequence.Meta.RegionEnd != 0 {
-		end = strconv.Itoa(annotatedSequence.Meta.RegionEnd)
-	} else if annotatedSequence.Meta.Locus.SequenceLength != "" {
+	if sequence.Meta.RegionEnd != 0 {
+		end = strconv.Itoa(sequence.Meta.RegionEnd)
+	} else if sequence.Meta.Locus.SequenceLength != "" {
 		reg, err := regexp.Compile("[^0-9]+")
 		if err != nil {
 			log.Fatal(err)
 		}
-		end = reg.ReplaceAllString(annotatedSequence.Meta.Locus.SequenceLength, "")
+		end = reg.ReplaceAllString(sequence.Meta.Locus.SequenceLength, "")
 	} else {
 		end = "1"
 	}
@@ -236,14 +253,14 @@ func BuildGff(annotatedSequence AnnotatedSequence) []byte {
 	regionString = "##sequence-region " + name + " " + start + " " + end + "\n"
 	gffBuffer.WriteString(regionString)
 
-	for _, feature := range annotatedSequence.Features {
+	for _, feature := range sequence.Features {
 		var featureString string
 
 		var featureName string
 		if feature.Name != "" {
 			featureName = feature.Name
 		} else {
-			featureName = annotatedSequence.Meta.Name
+			featureName = sequence.Meta.Locus.Name
 		}
 
 		var featureSource string
@@ -260,10 +277,10 @@ func BuildGff(annotatedSequence AnnotatedSequence) []byte {
 			featureType = "unknown"
 		}
 
-		// really really really need to make a genbank parser util for getting start and stop of region.
-		featureStart := strconv.Itoa(feature.Start)
+		// Indexing starts at 1 for gff so we need to shift up from Sequence 0 index.
+		featureStart := strconv.Itoa(feature.SequenceLocation.Start + 1)
+		featureEnd := strconv.Itoa(feature.SequenceLocation.End)
 
-		featureEnd := strconv.Itoa(feature.End)
 		featureScore := feature.Score
 		featureStrand := string(feature.Strand)
 		featurePhase := feature.Phase
@@ -290,11 +307,11 @@ func BuildGff(annotatedSequence AnnotatedSequence) []byte {
 
 	gffBuffer.WriteString("###\n")
 	gffBuffer.WriteString("##FASTA\n")
-	gffBuffer.WriteString(">" + annotatedSequence.Meta.Name + "\n")
+	gffBuffer.WriteString(">" + sequence.Meta.Name + "\n")
 
-	for letterIndex, letter := range annotatedSequence.Sequence.Sequence {
+	for letterIndex, letter := range sequence.Sequence {
 		letterIndex++
-		if letterIndex%70 == 0 && letterIndex != 0 {
+		if letterIndex%70 == 0 && letterIndex != 0 && letterIndex != sequence.Meta.RegionEnd {
 			gffBuffer.WriteRune(letter)
 			gffBuffer.WriteString("\n")
 		} else {
@@ -306,20 +323,20 @@ func BuildGff(annotatedSequence AnnotatedSequence) []byte {
 }
 
 // ReadGff takes in a filepath for a .gffv3 file and parses it into an Annotated Sequence struct.
-func ReadGff(path string) AnnotatedSequence {
+func ReadGff(path string) Sequence {
 	file, err := ioutil.ReadFile(path)
-	var annotatedSequence AnnotatedSequence
+	var sequence Sequence
 	if err != nil {
 		// return 0, fmt.Errorf("Failed to open file %s for unpack: %s", gzFilePath, err)
 	} else {
-		annotatedSequence = ParseGff(string(file))
+		sequence = ParseGff(file)
 	}
-	return annotatedSequence
+	return sequence
 }
 
-// WriteGff takes an AnnotatedSequence struct and a path string and writes out a gff to that path.
-func WriteGff(annotatedSequence AnnotatedSequence, path string) {
-	gff := BuildGff(annotatedSequence)
+// WriteGff takes an Sequence struct and a path string and writes out a gff to that path.
+func WriteGff(sequence Sequence, path string) {
+	gff := BuildGff(sequence)
 	_ = ioutil.WriteFile(path, gff, 0644)
 }
 
@@ -331,11 +348,390 @@ GFF specific IO related things end here.
 
 /******************************************************************************
 
+JSON specific IO related things begin here.
+
+******************************************************************************/
+
+// ParseJSON parses an Sequence JSON file and adds appropriate pointers to struct.
+func ParseJSON(file []byte) Sequence {
+	var sequence Sequence
+	json.Unmarshal([]byte(file), &sequence)
+	legacyFeatures := sequence.Features
+	sequence.Features = []Feature{}
+
+	for _, feature := range legacyFeatures {
+		sequence.AddFeature(feature)
+	}
+	return sequence
+}
+
+// ReadJSON reads an Sequence JSON file.
+func ReadJSON(path string) Sequence {
+	file, err := ioutil.ReadFile(path)
+	if err != nil {
+		// return 0, fmt.Errorf("Failed to open file %s for unpack: %s", gzFilePath, err)
+	}
+	sequence := ParseJSON(file)
+	return sequence
+}
+
+// WriteJSON writes an Sequence struct out to json.
+func WriteJSON(sequence Sequence, path string) {
+	file, _ := json.MarshalIndent(sequence, "", " ")
+	_ = ioutil.WriteFile(path, file, 0644)
+}
+
+/******************************************************************************
+
+JSON specific IO related things end here.
+
+******************************************************************************/
+
+/******************************************************************************
+
+FASTA specific IO related things begin here.
+
+******************************************************************************/
+
+// ParseFASTA parses a Sequence struct from a FASTA file and adds appropriate pointers to the structs.
+func ParseFASTA(file []byte) Sequence {
+	fasta := string(file)
+	var sequence Sequence
+	var feature Feature
+	var features []Feature
+	var sequenceBuffer bytes.Buffer
+	var start int
+	var end int
+
+	lines := strings.Split(fasta, "\n")
+	linesLength := len(lines) - 1
+
+	for lineIndex, line := range lines {
+
+		// if there's nothing on this line skip this iteration of the loop
+		if len(line) == 0 {
+			continue
+		}
+
+		// if it's a comment skip this line
+		if line[0:1] == ";" {
+			continue
+		}
+
+		if line[0:1] == ">" && lineIndex == 0 { // if it's the first description
+			feature.Description = line[1:]
+
+		} else if line[0:1] == ">" || lineIndex == linesLength { // if it's a description or the last line
+
+			// if end of file write line to buffer
+			if lineIndex == linesLength {
+				sequenceBuffer.WriteString(line)
+			}
+
+			// setting sequence location
+			feature.SequenceLocation.Start = start
+			end = len(sequenceBuffer.String())
+			feature.SequenceLocation.End = end
+
+			// setting start to end after assigning to location in feature.
+			start = end
+
+			// adding new feature to features slice
+			features = append(features, feature)
+
+			// resetting feature
+			feature = Feature{}
+
+			// if it's the last line
+			if lineIndex != linesLength {
+				feature.Description = line[1:]
+			}
+
+		} else {
+			sequenceBuffer.WriteString(line)
+		}
+	}
+
+	sequence.Sequence = sequenceBuffer.String()
+
+	// add features last so that internal pointer to parent sequence is accurate
+	for _, feature := range features {
+		sequence.AddFeature(feature)
+	}
+
+	return sequence
+}
+
+// BuildFASTA builds a FASTA string from a Sequence struct.
+func BuildFASTA(sequence Sequence) []byte {
+	var fastaBuffer bytes.Buffer
+	const maxLineLength = 70
+
+	for featureIndex, feature := range sequence.Features {
+
+		// if there isn't a descriptive comment don't write out feature to fasta file.
+		if feature.Description == "" {
+			continue
+		}
+		// write feature comment
+		fastaBuffer.WriteString(">" + feature.Description + "\n")
+
+		// range over sequence and add spacing
+		for characterIndex, character := range feature.GetSequence() {
+			characterIndex++
+			if characterIndex%maxLineLength == 0 && characterIndex != 0 {
+				fastaBuffer.WriteRune(character)
+				fastaBuffer.WriteString("\n")
+			} else {
+				fastaBuffer.WriteRune(character)
+			}
+		}
+
+		// if it's the end write new line.
+		if featureIndex != len(sequence.Features)-1 {
+			fastaBuffer.WriteString("\n\n")
+		}
+	}
+
+	return fastaBuffer.Bytes()
+}
+
+// ReadFASTA reads a Sequence struct from a FASTA file.
+func ReadFASTA(path string) Sequence {
+	file, err := ioutil.ReadFile(path)
+	if err != nil {
+		// return 0, fmt.Errorf("Failed to open file %s for unpack: %s", gzFilePath, err)
+	}
+	sequence := ParseFASTA(file)
+	return sequence
+}
+
+// WriteFASTA writes a Sequence struct out to FASTA.
+func WriteFASTA(sequence Sequence, path string) {
+	_ = ioutil.WriteFile(path, BuildFASTA(sequence), 0644)
+}
+
+/******************************************************************************
+
+FASTA specific IO related things end here.
+
+******************************************************************************/
+
+/******************************************************************************
+
 GBK specific IO related things begin here.
 
 ******************************************************************************/
 
-//used in parseLocus function though it could be useful elsewhere.
+// ParseGbk takes in a string representing a gbk/gb/genbank file and parses it into an Sequence object.
+func ParseGbk(file []byte) Sequence {
+
+	gbk := string(file)
+	lines := strings.Split(gbk, "\n")
+
+	// Create meta struct
+	meta := Meta{}
+	meta.Other = make(map[string]string)
+
+	// Create features struct
+	features := []Feature{}
+
+	// Create sequence struct
+	sequence := Sequence{}
+
+	for numLine := 0; numLine < len(lines); numLine++ {
+		line := lines[numLine]
+		splitLine := strings.Split(line, " ")
+		subLines := lines[numLine+1:]
+
+		// This is to keep the cursor from scrolling to the bottom another time after GetSequence() is called.
+		// Break has to be in scope and can't be called within switch statement.
+		// Otherwise it will just break the switch which is redundant.
+		sequenceBreakFlag := false
+		if sequenceBreakFlag == true {
+			break
+		}
+
+		switch strings.TrimSpace(splitLine[0]) {
+
+		case "":
+			continue
+		case "LOCUS":
+			meta.Locus = parseLocus(line)
+		case "DEFINITION":
+			meta.Definition = joinSubLines(splitLine, subLines)
+		case "ACCESSION":
+			meta.Accession = joinSubLines(splitLine, subLines)
+		case "VERSION":
+			meta.Version = joinSubLines(splitLine, subLines)
+		case "KEYWORDS":
+			meta.Keywords = joinSubLines(splitLine, subLines)
+		case "SOURCE":
+			meta.Source, meta.Organism = getSourceOrganism(splitLine, subLines)
+		case "REFERENCE":
+			meta.References = append(meta.References, getReference(splitLine, subLines))
+			continue
+		case "FEATURES":
+			features = getFeatures(subLines)
+		case "ORIGIN":
+			sequence.Sequence = getSequence(subLines)
+			sequenceBreakFlag = true
+		default:
+			if quickMetaCheck(line) {
+				key := strings.TrimSpace(splitLine[0])
+				meta.Other[key] = joinSubLines(splitLine, subLines)
+			}
+		}
+
+	}
+
+	// add meta to annotated sequence
+	sequence.Meta = meta
+
+	// add features to annotated sequence with pointer to annotated sequence in each feature
+	for _, feature := range features {
+		sequence.AddFeature(feature)
+	}
+
+	return sequence
+}
+
+// BuildGbk builds a GBK string to be written out to db or file.
+func BuildGbk(sequence Sequence) []byte {
+	var gbkString bytes.Buffer
+	locus := sequence.Meta.Locus
+	var shape string
+
+	if locus.Circular {
+		shape = "circular"
+	} else if locus.Linear {
+		shape = "linear"
+	}
+
+	fivespace := generateWhiteSpace(subMetaIndex)
+
+	// building locus
+	locusData := locus.Name + fivespace + locus.SequenceLength + " bp" + fivespace + locus.MoleculeType + fivespace + shape + fivespace + locus.GenbankDivision + fivespace + locus.ModificationDate
+	locusString := "LOCUS       " + locusData + "\n"
+	gbkString.WriteString(locusString)
+
+	// building other standard meta features
+	definitionString := buildMetaString("DEFINITION", sequence.Meta.Definition)
+	gbkString.WriteString(definitionString)
+
+	accessionString := buildMetaString("ACCESSION", sequence.Meta.Accession)
+	gbkString.WriteString(accessionString)
+
+	versionString := buildMetaString("VERSION", sequence.Meta.Version)
+	gbkString.WriteString(versionString)
+
+	keywordsString := buildMetaString("KEYWORDS", sequence.Meta.Keywords)
+	gbkString.WriteString(keywordsString)
+
+	sourceString := buildMetaString("SOURCE", sequence.Meta.Source)
+	gbkString.WriteString(sourceString)
+
+	organismString := buildMetaString("  ORGANISM", sequence.Meta.Organism)
+	gbkString.WriteString(organismString)
+
+	// building references
+	// TODO: could use reflection to get keys and make more general.
+	for referenceIndex, reference := range sequence.Meta.References {
+		referenceData := strconv.Itoa(referenceIndex+1) + "  " + reference.Range
+		referenceString := buildMetaString("REFERENCE", referenceData)
+		gbkString.WriteString(referenceString)
+
+		if reference.Authors != "" {
+			authorsString := buildMetaString("  AUTHORS", reference.Authors)
+			gbkString.WriteString(authorsString)
+		}
+
+		if reference.Title != "" {
+			titleString := buildMetaString("  TITLE", reference.Title)
+			gbkString.WriteString(titleString)
+		}
+
+		if reference.Journal != "" {
+			journalString := buildMetaString("  JOURNAL", reference.Journal)
+			gbkString.WriteString(journalString)
+		}
+
+		if reference.PubMed != "" {
+			pubMedString := buildMetaString("  PUBMED", reference.PubMed)
+			gbkString.WriteString(pubMedString)
+		}
+
+	}
+
+	// building other meta fields that are catch all
+	otherKeys := make([]string, 0, len(sequence.Meta.Other))
+	for key := range sequence.Meta.Other {
+		otherKeys = append(otherKeys, key)
+	}
+
+	for _, otherKey := range otherKeys {
+		otherString := buildMetaString(otherKey, sequence.Meta.Other[otherKey])
+		gbkString.WriteString(otherString)
+	}
+
+	// start writing features section.
+	gbkString.WriteString("FEATURES             Location/Qualifiers\n")
+	for _, feature := range sequence.Features {
+		gbkString.WriteString(buildGbkFeatureString(feature))
+	}
+
+	// start writing sequence section.
+	gbkString.WriteString("ORIGIN\n")
+
+	// iterate over every character in sequence range.
+	for index, base := range sequence.Sequence {
+		// if 60th character add newline then whitespace and index number and space before adding next base.
+		if index%60 == 0 {
+			if index != 0 {
+				gbkString.WriteString("\n")
+			}
+			lineNumberString := strconv.Itoa(index + 1)          // genbank indexes at 1 for some reason
+			leadingWhiteSpaceLength := 9 - len(lineNumberString) // <- I wish I was kidding
+			for i := 0; i < leadingWhiteSpaceLength; i++ {
+				gbkString.WriteString(" ")
+			}
+			gbkString.WriteString(lineNumberString + " ")
+			gbkString.WriteRune(base)
+			// if base index is divisible by ten add a space (genbank convention)
+		} else if index%10 == 0 {
+			gbkString.WriteString(" ")
+			gbkString.WriteRune(base)
+			// else just add the base.
+		} else {
+			gbkString.WriteRune(base)
+		}
+	}
+	// finish genbank file with "//" on newline (again a genbank convention)
+	gbkString.WriteString("\n//")
+
+	return gbkString.Bytes()
+}
+
+// ReadGbk reads a Gbk from path and parses into an Annotated sequence struct.
+func ReadGbk(path string) Sequence {
+	file, err := ioutil.ReadFile(path)
+	var sequence Sequence
+	if err != nil {
+		// return 0, fmt.Errorf("Failed to open file %s for unpack: %s", gzFilePath, err)
+	} else {
+		sequence = ParseGbk(file)
+
+	}
+	return sequence
+}
+
+// WriteGbk takes an Sequence struct and a path string and writes out a gff to that path.
+func WriteGbk(sequence Sequence, path string) {
+	gbk := BuildGbk(sequence)
+	_ = ioutil.WriteFile(path, gbk, 0644)
+}
+
+// used in parseLocus function though it could be useful elsewhere.
 var genbankDivisions = []string{
 	"PRI", //primate sequences
 	"ROD", //rodent sequences
@@ -372,7 +768,7 @@ var genBankMoleculeTypes = []string{
 	"unassigned RNA",
 }
 
-//used in feature check functions.
+// used in feature check functions.
 var genbankTopLevelFeatures = []string{
 	"LOCUS",
 	"DEFINITION",
@@ -385,7 +781,7 @@ var genbankTopLevelFeatures = []string{
 	"ORIGIN",
 }
 
-//used in feature check functions.
+// used in feature check functions.
 var genbankSubLevelFeatures = []string{
 	"ORGANISM",
 	"AUTHORS",
@@ -395,7 +791,7 @@ var genbankSubLevelFeatures = []string{
 	"REMARK",
 }
 
-//all gene feature types in genbank
+// all gene feature types in genbank
 var genbankGeneFeatureTypes = []string{
 	"assembly_gap",
 	"C_region",
@@ -562,7 +958,7 @@ const qualifierIndex = 21
 
 func quickMetaCheck(line string) bool {
 	flag := false
-	if string(line[metaIndex]) != " " {
+	if string(line[metaIndex]) != " " && string(line[0:2]) != "//" {
 		flag = true
 	}
 	return flag
@@ -618,70 +1014,15 @@ func topLevelFeatureCheck(featureString string) bool {
 	return flag
 }
 
-// checks for only sub level features in genbankSubLevelFeatures array
-func subLevelFeatureCheck(featureString string) bool {
-	flag := false
-	cleanedFeatureString := strings.TrimSpace(featureString)
-	for _, feature := range genbankSubLevelFeatures {
-		if feature == cleanedFeatureString {
-			flag = true
-			break
-		}
-	}
-	return flag
-}
-
-// checks for both sub and top level features in genbankSubLevelFeatures and genbankTopLevelFeatures array
-func allLevelFeatureCheck(featureString string) bool {
-	flag := false
-	cleanedFeatureString := strings.TrimSpace(featureString)
-	if subLevelFeatureCheck(cleanedFeatureString) || topLevelFeatureCheck(cleanedFeatureString) {
-		flag = true
-	}
-	return flag
-}
-
-// will eventually refactor all checks into one function.
-func geneFeatureTypeCheck(featureString string) bool {
-	flag := false
-	cleanedFeatureString := strings.TrimSpace(featureString)
-	for _, feature := range genbankGeneFeatureTypes {
-		if feature == cleanedFeatureString {
-			flag = true
-			break
-		}
-	}
-	return flag
-}
-
-func geneQualifierTypeCheck(featureString string) bool {
-	flag := false
-	cleanedFeatureString := strings.TrimSpace(strings.SplitAfter(featureString, "=")[0])
-	for _, feature := range genbankGeneQualifierTypes {
-		if feature == cleanedFeatureString {
-			flag = true
-			break
-		}
-	}
-	return flag
-}
-
-func allGeneTypeCheck(featureString string) bool {
-	flag := false
-	cleanedFeatureString := strings.TrimSpace(featureString)
-	if geneQualifierTypeCheck(cleanedFeatureString) || topLevelFeatureCheck(cleanedFeatureString) {
-		flag = true
-	}
-	return flag
-}
-
 // parses locus from provided string.
 func parseLocus(locusString string) Locus {
 	locus := Locus{}
 
 	basePairRegex, _ := regexp.Compile(` \d* \w{2} `)
 	circularRegex, _ := regexp.Compile(` circular `)
-	modDateRegex, _ := regexp.Compile(`\d{2}-[A-Z]{3}-\d{4}`)
+	linearRegex, _ := regexp.Compile(` linear `)
+
+	ModificationDateRegex, _ := regexp.Compile(`\d{2}-[A-Z]{3}-\d{4}`)
 
 	locusSplit := strings.Split(strings.TrimSpace(locusString), " ")
 
@@ -717,8 +1058,10 @@ func parseLocus(locusString string) Locus {
 	// circularity flag
 	if circularRegex.Match([]byte(locusString)) {
 		locus.Circular = true
-	} else {
-		locus.Circular = false
+	}
+
+	if linearRegex.Match([]byte(locusString)) {
+		locus.Linear = true
 	}
 
 	// genbank division
@@ -726,13 +1069,13 @@ func parseLocus(locusString string) Locus {
 		genbankDivisionRegex, _ := regexp.Compile(genbankDivision)
 		match := string(genbankDivisionRegex.Find([]byte(locusString)))
 		if match != "" {
-			locus.GenBankDivision = match
+			locus.GenbankDivision = match
 			break
 		}
 	}
 
-	// ModDate
-	locus.ModDate = modDateRegex.FindString(locusString)
+	// ModificationDate
+	locus.ModificationDate = ModificationDateRegex.FindString(locusString)
 
 	return locus
 }
@@ -808,9 +1151,6 @@ func getFeatures(lines []string) []Feature {
 	lineIndex := 0
 	features := []Feature{}
 
-	locationExtractionRegex, _ := regexp.Compile(`\d+..\d+`)
-	complementLocationRegex, _ := regexp.Compile(`\((.*?)\)`)
-
 	// regex to remove quotes and slashes from qualifiers
 	reg, _ := regexp.Compile("[\"/\n]+")
 
@@ -831,27 +1171,9 @@ func getFeatures(lines []string) []Feature {
 
 		// assign type and location to feature.
 		feature.Type = strings.TrimSpace(splitLine[0])
-		// feature.Location is the string used by GBK to denote location
-		feature.Location = strings.TrimSpace(splitLine[len(splitLine)-1])
-
-		// getting usable coordinates with meta.
-		if locationExtractionRegex.MatchString(feature.Location) {
-			indeces := strings.Split(locationExtractionRegex.FindString(feature.Location), "..")
-			feature.Start, _ = strconv.Atoi(indeces[0])
-			feature.End, _ = strconv.Atoi(indeces[1])
-
-			if complementLocationRegex.MatchString(feature.Location) {
-				feature.Complement = true
-			}
-
-			if strings.Contains(feature.Location, "<") {
-				feature.FivePrimePartial = true
-			}
-
-			if strings.Contains(feature.Location, ">") {
-				feature.ThreePrimePartial = true
-			}
-		}
+		// feature.GbkLocationString is the string used by GBK to denote location
+		feature.GbkLocationString = strings.TrimSpace(splitLine[len(splitLine)-1])
+		feature.SequenceLocation = parseGbkLocation(feature.GbkLocationString)
 
 		// initialize attributes.
 		feature.Attributes = make(map[string]string)
@@ -913,9 +1235,8 @@ func getFeatures(lines []string) []Feature {
 	return features
 }
 
-// takes every line after origin feature and removes anything that isn't in the alphabet. Returns sequence.
-func getSequence(subLines []string) Sequence {
-	sequence := Sequence{}
+// takes every line after origin feature and removes anything that isn't in the alphabet. Returns sequence string.
+func getSequence(subLines []string) string {
 	var sequenceBuffer bytes.Buffer
 	reg, err := regexp.Compile("[^a-zA-Z]+")
 	if err != nil {
@@ -924,119 +1245,160 @@ func getSequence(subLines []string) Sequence {
 	for _, subLine := range subLines {
 		sequenceBuffer.WriteString(subLine)
 	}
-	sequence.Sequence = reg.ReplaceAllString(sequenceBuffer.String(), "")
+	sequence := reg.ReplaceAllString(sequenceBuffer.String(), "")
 	return sequence
 }
 
-// ParseGbk takes in a string representing a gbk/gb/genbank file and parses it into an AnnotatedSequence object.
-func ParseGbk(gbk string) AnnotatedSequence {
+func parseGbkLocation(locationString string) Location {
+	var location Location
+	if !(strings.ContainsAny(locationString, "(")) { // Case checks for simple expression of x..x
+		// to remove FivePrimePartial and ThreePrimePartial indicators from start and end before converting to int.
+		partialRegex, _ := regexp.Compile("<|>")
+		startEndSplit := strings.Split(locationString, "..")
+		start, _ := strconv.Atoi(partialRegex.ReplaceAllString(startEndSplit[0], ""))
+		end, _ := strconv.Atoi(partialRegex.ReplaceAllString(startEndSplit[1], ""))
 
-	lines := strings.Split(gbk, "\n")
+		location = Location{Start: start - 1, End: end}
 
-	// Create meta struct
-	meta := Meta{}
+	} else {
+		firstOuterParentheses := strings.Index(locationString, "(")
+		expression := locationString[firstOuterParentheses+1 : strings.LastIndex(locationString, ")")]
+		switch command := locationString[0:firstOuterParentheses]; command {
+		case "join":
+			location.Join = true
+			// This case checks for join(complement(x..x),complement(x..x)), or any more complicated derivatives
+			if strings.ContainsAny(expression, "(") {
+				firstInnerParentheses := strings.Index(expression, "(")
+				ParenthesesCount := 1
+				comma := 0
+				for i := 1; ParenthesesCount > 0; i++ { // "(" is at 0, so we start at 1
+					comma = i
+					switch expression[firstInnerParentheses+i] {
+					case []byte("(")[0]:
+						ParenthesesCount++
+					case []byte(")")[0]:
+						ParenthesesCount--
+					}
+				}
+				location.SubLocations = append(location.SubLocations, parseGbkLocation(expression[:firstInnerParentheses+comma+1]), parseGbkLocation(expression[2+firstInnerParentheses+comma:]))
+			} else { // This is the default join(x..x,x..x)
+				for _, numberRange := range strings.Split(expression, ",") {
+					location.SubLocations = append(location.SubLocations, parseGbkLocation(numberRange))
+				}
+			}
 
-	// Create features struct
-	features := []Feature{}
-
-	// Create sequence struct
-	sequence := Sequence{}
-
-	for numLine := 0; numLine < len(lines); numLine++ {
-		line := lines[numLine]
-		splitLine := strings.Split(line, " ")
-		subLines := lines[numLine+1:]
-
-		// This is to keep the cursor from scrolling to the bottom another time after getSequence() is called.
-		// Break has to be in scope and can't be called within switch statement.
-		// Otherwise it will just break the switch which is redundant.
-		sequenceBreakFlag := false
-		if sequenceBreakFlag == true {
-			break
+		case "complement":
+			subLocation := parseGbkLocation(expression)
+			subLocation.Complement = true
+			location.SubLocations = append(location.SubLocations, subLocation)
 		}
-
-		switch strings.TrimSpace(splitLine[0]) {
-
-		case "":
-			continue
-		case "LOCUS":
-			meta.Locus = parseLocus(line)
-		case "DEFINITION":
-			meta.Definition = joinSubLines(splitLine, subLines)
-		case "ACCESSION":
-			meta.Accession = joinSubLines(splitLine, subLines)
-		case "VERSION":
-			meta.Version = joinSubLines(splitLine, subLines)
-		case "KEYWORDS":
-			meta.Keywords = joinSubLines(splitLine, subLines)
-		case "SOURCE":
-			meta.Source, meta.Organism = getSourceOrganism(splitLine, subLines)
-		case "REFERENCE":
-			meta.References = append(meta.References, getReference(splitLine, subLines))
-			continue
-		case "FEATURES":
-			features = getFeatures(subLines)
-		case "ORIGIN":
-			sequence = getSequence(subLines)
-			sequenceBreakFlag = true
-		default:
-			continue
-		}
-
 	}
-	var annotatedSequence AnnotatedSequence
-	annotatedSequence.Meta = meta
-	annotatedSequence.Features = features
-	annotatedSequence.Sequence = sequence
 
-	return annotatedSequence
+	if strings.Contains(locationString, "<") {
+		location.FivePrimePartial = true
+	}
+
+	if strings.Contains(locationString, ">") {
+		location.ThreePrimePartial = true
+	}
+
+	// if excess root node then trim node. Maybe should just be handled with second arg?
+	if location.Start == 0 && location.End == 0 && location.Join == false && location.Complement == false {
+		location = location.SubLocations[0]
+	}
+
+	return location
 }
 
-// ReadGbk reads a Gbk from path and parses into an Annotated sequence struct.
-func ReadGbk(path string) AnnotatedSequence {
-	file, err := ioutil.ReadFile(path)
-	var annotatedSequence AnnotatedSequence
-	if err != nil {
-		// return 0, fmt.Errorf("Failed to open file %s for unpack: %s", gzFilePath, err)
+// buildMetaString is a helper function to build the meta section of genbank files.
+func buildMetaString(name string, data string) string {
+	keyWhitespaceTrailLength := 12 - len(name) // I wish I was kidding.
+	var keyWhitespaceTrail string
+	for i := 0; i < keyWhitespaceTrailLength; i++ {
+		keyWhitespaceTrail += " "
+	}
+	name += keyWhitespaceTrail
+	wrappedData := wordwrap.WrapString(data, 68)
+	splitData := strings.Split(wrappedData, "\n")
+	var returnData string
+	for index, datum := range splitData {
+		if index == 0 {
+			returnData = name + datum + "\n"
+		} else {
+			returnData += generateWhiteSpace(11) + datum + "\n"
+		}
+	}
+
+	return returnData
+}
+
+// buildGbkLocationString is a recursive function that takes a location object and creates a gbk location string for BuildGbk()
+func buildGbkLocationString(location Location) string {
+
+	var locationString string
+
+	if location.Complement {
+		location.Complement = false
+		locationString = "complement(" + buildGbkLocationString(location) + ")"
+
+	} else if location.Join {
+		locationString = "join("
+		for _, sublocation := range location.SubLocations {
+			locationString += buildGbkLocationString(sublocation) + ","
+		}
+		locationString = strings.TrimSuffix(locationString, ",") + ")"
 	} else {
-		gbkString := string(file)
-		annotatedSequence = ParseGbk(gbkString)
+
+		locationString = strconv.Itoa(location.Start+1) + ".." + strconv.Itoa(location.End)
+		if location.FivePrimePartial {
+			locationString = "<" + locationString
+		}
+
+		if location.ThreePrimePartial {
+			locationString += ">"
+		}
+	}
+	return locationString
+}
+
+// buildGbkFeatureString is a helper function to build gbk feature strings for BuildGbk()
+func buildGbkFeatureString(feature Feature) string {
+	whiteSpaceTrailLength := 16 - len(feature.Type) // I wish I was kidding.
+	whiteSpaceTrail := generateWhiteSpace(whiteSpaceTrailLength)
+	var location string
+
+	if feature.GbkLocationString != "" {
+		location = feature.GbkLocationString
+	} else {
+		location = buildGbkLocationString(feature.SequenceLocation)
+	}
+	featureHeader := generateWhiteSpace(subMetaIndex) + feature.Type + whiteSpaceTrail + location + "\n"
+	returnString := featureHeader
+
+	qualifierKeys := make([]string, 0, len(feature.Attributes))
+	for key := range feature.Attributes {
+		qualifierKeys = append(qualifierKeys, key)
+	}
+
+	for _, qualifier := range qualifierKeys {
+		returnString += generateWhiteSpace(qualifierIndex) + "/" + qualifier + "=\"" + feature.Attributes[qualifier] + "\"\n"
 
 	}
-	return annotatedSequence
+	return returnString
+}
+
+func generateWhiteSpace(length int) string {
+	var spaceBuilder strings.Builder
+
+	for i := 0; i < length; i++ {
+		spaceBuilder.WriteString(" ")
+	}
+
+	return spaceBuilder.String()
 }
 
 /******************************************************************************
 
 GBK specific IO related things end here.
-
-******************************************************************************/
-
-/******************************************************************************
-
-JSON specific IO related things begin here.
-
-******************************************************************************/
-
-// WriteJSON writes an AnnotatedSequence struct out to json.
-func WriteJSON(annotatedSequence AnnotatedSequence, path string) {
-	file, _ := json.MarshalIndent(annotatedSequence, "", " ")
-	_ = ioutil.WriteFile(path, file, 0644)
-}
-
-// ReadJSON reads an AnnotatedSequence JSON file.
-func ReadJSON(path string) AnnotatedSequence {
-	file, err := ioutil.ReadFile(path)
-	if err != nil {
-		// return 0, fmt.Errorf("Failed to open file %s for unpack: %s", gzFilePath, err)
-	}
-	var annotatedSequence AnnotatedSequence
-	json.Unmarshal([]byte(file), &annotatedSequence)
-	return annotatedSequence
-}
-
-/******************************************************************************
-
-JSON specific IO related things end here.
 
 ******************************************************************************/
