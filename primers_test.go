@@ -3,6 +3,7 @@ package poly
 import (
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -78,5 +79,52 @@ func TestMeltingTemp(t *testing.T) {
 	expectedTM := 52.8
 	if calcTM := MeltingTemp(testSeq); math.Abs(expectedTM-calcTM)/expectedTM >= 0.02 {
 		t.Errorf("MeltingTemp has changed on test. Got %f instead of %f", calcTM, expectedTM)
+	}
+}
+
+func ExampleDeBruijn() {
+	a := DeBruijn(4)
+
+	fmt.Println(a)
+	// Output: AAAATAAAGAAACAATTAATGAATCAAGTAAGGAAGCAACTAACGAACCATATAGATACATTTATTGATTCATGTATGGATGCATCTATCGATCCAGAGACAGTTAGTGAGTCAGGTAGGGAGGCAGCTAGCGAGCCACACTTACTGACTCACGTACGGACGCACCTACCGACCCTTTTGTTTCTTGGTTGCTTCGTTCCTGTGTCTGGGTGGCTGCGTGCCTCTCGGTCGCTCCGTCCCGGGGCGGCCGCGCCCCAAA
+}
+
+func ExampleUniqueSequence() {
+	c := make(chan string)
+	go UniqueSequence(c, 20, 4, []string{"CTCTCGGTCGCTCC"}, []func(string) bool{})
+	var output string
+	for a := range c {
+		output = a
+	}
+
+	fmt.Println(output)
+	// Output: TCTCGGTCGCTCCGTCCCGG
+}
+
+func TestUniqueSequence(t *testing.T) {
+	c := make(chan string)
+	testFunc := func(s string) bool {
+		if strings.Contains(s, "GGCCGCGCCCC") {
+			return false
+		} else {
+			return true
+		}
+	}
+	go UniqueSequence(c, 20, 4, []string{}, []func(string) bool{testFunc})
+	var output string
+	for a := range c {
+		output = a
+	}
+	if output != "CTCTCGGTCGCTCCGTCCCG" {
+		t.Errorf("TestUniqueSequence function should return CTCTCGGTCGCTCCGTCCCG. Got:\n%s", output)
+	}
+
+	b := make(chan string)
+	go UniqueSequence(b, 20, 4, []string{"GGCCGCGCCCC"}, []func(string) bool{})
+	for d := range b {
+		output = d
+	}
+	if output != "CTCTCGGTCGCTCCGTCCCG" {
+		t.Errorf("TestUniqueSequence string should return CTCTCGGTCGCTCCGTCCCG. Got:\n%s", output)
 	}
 }
