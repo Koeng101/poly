@@ -1,4 +1,4 @@
-module github.com/TimothyStiles/poly
+module github.com/koeng101/poly 
 
 go 1.13
 
