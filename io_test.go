@@ -333,6 +333,18 @@ JSON related tests end here.
 
 ******************************************************************************/
 
+func ExampleReadFASTAGz() {
+	fastas := make(chan Fasta, 1000)
+	go ReadFASTAGz("data/uniprot_1mb_test.fasta.gz", fastas)
+	var name string
+	for fasta := range fastas {
+		name = fasta.Name
+	}
+
+	fmt.Println(name)
+	// Output: sp|P86857|AGP_MYTCA Alanine and glycine-rich protein (Fragment) OS=Mytilus californianus OX=6549 PE=1 SV=1
+}
+
 /******************************************************************************
 
 FASTA related tests begin here.
