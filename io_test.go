@@ -338,6 +338,12 @@ func ExampleReadFASTAGz() {
 	go ReadFASTAGz("data/uniprot_1mb_test.fasta.gz", fastas)
 	var name string
 	for fasta := range fastas {
+		_, err := Seqhash(fasta.Sequence, "PROTEIN", false, false)
+		if err != nil {
+			fmt.Println("Failed on : ", err)
+			fmt.Println("Uniprot: ", fasta.Name)
+			fmt.Println("Sequence:", fasta.Sequence)
+		}
 		name = fasta.Name
 	}
 
