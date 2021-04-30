@@ -143,7 +143,7 @@ store that relate to storing and searching large quantities of sequences - dedup
 be used on those Seqhashes to save a lot of space.
 
 For DNA or RNA sequences, only ATUGCYRSWKMBDHVNZ characters are allowed. For Proteins,
-only ACDEFGHIKLMNPQRSTVWYUO* characters are allowed in sequences. Selenocysteine (Sec; U) and pyrrolysine
+only ACDEFGHIKLMNPQRSTVWYUO*BXZ characters are allowed in sequences. Selenocysteine (Sec; U) and pyrrolysine
 (Pyl; O) are included in the protein character set - usually U and O don't occur within protein sequences,
 but for certain organisms they do, and it is certainly a relevant amino acid for those particular proteins.
 
@@ -166,7 +166,7 @@ Keoni
 
 ******************************************************************************/
 
-// Seqhash is a function to create Seqhashes, a specific kind of identifier
+// Seqhash is a function to create Seqhashes, a specific kind of identifier.
 func Seqhash(sequence string, sequenceType string, circular bool, doubleStranded bool) (string, error) {
 	// By definition, Seqhashes are of uppercase sequences
 	sequence = strings.ToUpper(sequence)
@@ -234,7 +234,7 @@ func Seqhash(sequence string, sequenceType string, circular bool, doubleStranded
 	case "PROTEIN":
 		sequenceTypeLetter = "P"
 	}
-	// Get 2nd letter. C for circular, L for Liner
+	// Get 2nd letter. C for circular, L for Linear
 	if circular == true {
 		circularLetter = "C"
 	} else {
@@ -257,7 +257,7 @@ func Seqhash(sequence string, sequenceType string, circular bool, doubleStranded
 // all sequence structs are, by default, double-stranded sequences,
 // since Genbank does not track whether or not a given sequence in their
 // database is single stranded or double stranded.
-func (sequence Sequence) SequenceSeqhash() (string, error) {
+func (sequence Sequence) Seqhash() (string, error) {
 	if sequence.Meta.Locus.MoleculeType == "" {
 		return "", errors.New("No MoleculeType found for sequence")
 	}
