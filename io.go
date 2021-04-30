@@ -1063,7 +1063,7 @@ func getFeatures(lines []string) []Feature {
 		// feature.GbkLocationString is the string used by GBK to denote location
 		feature.GbkLocationString = strings.TrimSpace(splitLine[len(splitLine)-1])
 
-		//
+		// Check if the location string is multiple lines.
 		nextLineNum := 0
 		for {
 			nextLineNum++
@@ -1083,7 +1083,7 @@ func getFeatures(lines []string) []Feature {
 
 		// end of feature declaration line. Bump to next line and begin looking for qualifiers.
 		lineIndex++
-		line = lines[lineIndex]
+		line = lines[lineIndex+nextLineNum-1]
 
 		// loop through potential qualifiers. Break if not a qualifier or sub line.
 		// Definition of qualifiers here: http://www.insdc.org/files/feature_table.html#3.3
