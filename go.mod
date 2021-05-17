@@ -10,7 +10,7 @@ require (
 	github.com/mitchellh/go-wordwrap v1.0.1
 	github.com/mroth/weightedrand v0.2.1
 	github.com/pmezard/go-difflib v1.0.0
-	github.com/sergi/go-diff v1.2.0
-	github.com/urfave/cli/v2 v2.3.0
-	lukechampine.com/blake3 v1.1.5
+	github.com/sergi/go-diff v1.1.0
+	github.com/urfave/cli/v2 v2.2.1-0.20201022014932-30bb6982f258
+	lukechampine.com/blake3 v1.0.0
 )
