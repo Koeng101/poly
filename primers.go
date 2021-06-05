@@ -2,9 +2,7 @@ package poly
 
 import (
 	"bytes"
-	"errors"
 	"math"
-	"strconv"
 	"strings"
 )
 
@@ -109,152 +107,180 @@ func MeltingTemp(sequence string) float64 {
 }
 
 /******************************************************************************
+May 23 2021
+
 Start of the De Bruijn stuff
+
+=== Barcode basics ===
+
+We're rapidly getting better at sequencing a lot of DNA. At their core, most
+DNA sequencing technologies pool together many samples and sequence them all
+at once. For example, let's say we have 2 samples of DNA whose true sequence
+is as follows:
+
+DNA-1 := ATGC
+DNA-2 := AGGC
+
+If we pooled these two samples together into a single tube, and sequenced
+them, we would not be able to tell if ATGC came from DNA-1 or DNA-2. In order
+to tell the difference, we would have to go through the process of DNA
+barcoding. Let's attach(2) two small barcodes to each DNA fragment separately
+in their own tubes and then pool them togehter:
+
+Barcode-1 + DNA-1 = GC + ATGC = GCATGC
+Barcode-2 + DNA-2 = AT + AGGC = ATAGGC
+
+When we sequence this pool together, we will end up with two sequences,
+GCATGC and ATAGGC. If we correlate the first 2 base pairs with the tube
+the sample came from, we can derive DNA-1 is ATGC and DNA-2 is AGGC.
+
+
+
+=== Redundancy and start sites ===
+
+Now, let's say we have the need for N number of samples to be pooled
+together. The minimal barcode length could be expressed as:
+
+n = number of samples
+b = bases required in a minimal barcode
+
+4^b = n
+OR
+log4n = b
+
+In our perfect case, we would only need 8 base pair barcodes to represent 65536
+different samples. Reality is a little different, however.
+
+1. Failure of DNA sequencers to accurately sequence the barcode, leading for
+   one barcoed to be mistaken for a different barcode
+2. Misalignment of the barcode to the sequence. We cannot guarantee that the
+   DNA sequencer will begin sequencing our fragment at an exact base pair.
+3. Misreading of sequence as barcode. If our barcode is only 8 base pairs, on
+   average, it will occur once within 65536 base pairs, and that occurrence may
+   be misread as a barcode.
+
+These challenges force us to build a barcode that has the following features:
+
+1. Any barcode must be different enough from any other barcode that there will
+   be no misreading, even with mutated base pairs.
+2. Any barcode must be large enough that, on average, it will not occur in a
+   natural piece of DNA.
+
+While the second feature is quite easy (use ~20-30 base pair barcodes), the
+first can be challenging. When developing a large quantity of barcodes, how
+do you guarantee that they are optimally distanced from each other so that
+there will be no cross-talk?
+
+=== Our solution to distanced barcodes ===
+
+De Bruijn sequences are an interesting data structure where every possible
+substring of length N occurs exactly once as a substring(1). For example, a De
+Bruijn sequence of length 3 will only have ATG occur once in the entire
+sequence.
+
+By constructing a nucleobase De Bruijn sequence, and selecting barcodes from
+within that De Bruijn sequence, we can guarantee that each barcode will never
+share any N length substring, since it only occurs once within the whole De
+Bruijn sequence.
+
+For example, a nucleobase De Bruijn sequence of substring length 6 is 4101
+base pairs long (4^n + (n-1)). You can generate 205 20 base pair barcodes with
+each barcode guaranteed to never share any 6 base pairs. This makes it very
+easy to unambiguously parse which samples came from where, while maintaining
+a guarantee of optimal distancing between your barcodes.
+
+Good luck with barcoding,
+
+Keoni
+
+(1) https://en.wikipedia.org/wiki/De_Bruijn_sequence
+(2) Barcodes are usually added in a process called "ligation" using an enzyme
+    called ligase, which basically just glues together DNA fragments. Wikipedia
+    has a good introduction:
+    https://en.wikipedia.org/wiki/Ligation_(molecular_biology)
+
 ******************************************************************************/
 
-// DeBruijn generates a DNA DeBruijn sequence
-// https://rosettacode.org/wiki/De_Bruijn_sequences#Go
-// Pulled and adapted from here
-func DeBruijn(n int) string {
-	k := 4
+// NucleobaseDeBruijnSequence generates a DNA DeBruijn sequence with alphabet ATGC. DeBruijn sequences are basically a string with all unique substrings of an alphabet represented exactly once. Code is adapted from https://rosettacode.org/wiki/De_Bruijn_sequences#Go
+func NucleobaseDeBruijnSequence(substringLength int) string {
 	alphabet := "ATGC"
-	a := make([]byte, k*n)
+	alphabetLength := len(alphabet)
+	a := make([]byte, alphabetLength*substringLength)
 	var seq []byte
-	var db func(int, int) // recursive closure
-	db = func(t, p int) {
-		if t > n {
-			if n%p == 0 {
+	// The following function is mainly adapted from rosettacode.
+	var ConstructDeBruijn func(int, int) // recursive closure
+	ConstructDeBruijn = func(t, p int) {
+		if t > substringLength {
+			if substringLength%p == 0 {
 				seq = append(seq, a[1:p+1]...)
 			}
 		} else {
 			a[t] = a[t-p]
-			db(t+1, p)
-			for j := int(a[t-p] + 1); j < k; j++ {
+			ConstructDeBruijn(t+1, p)
+			for j := int(a[t-p] + 1); j < alphabetLength; j++ {
 				a[t] = byte(j)
-				db(t+1, t)
+				ConstructDeBruijn(t+1, t)
 			}
 		}
 	}
-	db(1, 1)
+	ConstructDeBruijn(1, 1)
 	var buf bytes.Buffer
 	for _, i := range seq {
 		buf.WriteByte(alphabet[i])
 	}
 	b := buf.String()
-	return b + b[0:n-1] // as cyclic append first (n-1) digits
+	return b + b[0:substringLength-1] // as cyclic append first (n-1) digits
 }
 
-// UniqueSequence takes a channel and fills it with Unique sequences
-// which can then be sorted for desired properties (high/low GC,
-// restriction enzyme sites, etc)
-func UniqueSequence(c chan string, length int, maxSubSequence int, banned []string, bannedFunc []func(string) bool) {
+// CreateBarcodesWithBannedSequences creates a list of barcodes given a desired barcode length, the maxSubSequence shared in each barcode,
+// Sequences may be marked as banned by passing a static list, `bannedSequences`, or, if more flexibility is needed, through a list of `bannedFunctions` that dynamically generates bannedSequences.
+// If a sequence is banned, it will not appear within a barcode. The a `bannedFunctions` function can determine if a barcode should be banned or not on the fly. If it is banned, we will continuing iterating until a barcode is found that satisfies the bannedFunction requirement.
+func CreateBarcodesWithBannedSequences(length int, maxSubSequence int, bannedSequences []string, bannedFunctions []func(string) bool) []string {
+	var barcodes []string
 	var start int
 	var end int
-	debruijn := DeBruijn(maxSubSequence)
-	for i := 0; (i*(length-(maxSubSequence-1)))+length < len(debruijn); {
-		start = i * (length - (maxSubSequence - 1))
+	debruijn := NucleobaseDeBruijnSequence(maxSubSequence)
+	for barcodeNum := 0; (barcodeNum*(length-(maxSubSequence-1)))+length < len(debruijn); {
+		start = barcodeNum * (length - (maxSubSequence - 1))
 		end = start + length
-		i++
-		for _, b := range banned {
-			for strings.Contains(debruijn[start:end], b) {
+		barcodeNum++
+		for _, bannedSequence := range bannedSequences {
+			// If the current deBruijn range has the banned sequence, iterate one base pair ahead. If the iteration reaches the end of the deBruijn sequence, close the channel and return the function.
+			for strings.Contains(debruijn[start:end], bannedSequence) {
 				if end+1 > len(debruijn) {
-					close(c)
-					return
-				} else {
-					start++
-					end++
-					i++
+					return barcodes
 				}
+				start++
+				end++
+				barcodeNum++
+			}
+			// Check reverse complement as well for the banned sequence
+			for strings.Contains(debruijn[start:end], ReverseComplement(bannedSequence)) {
+				if end+1 > len(debruijn) {
+					return barcodes
+				}
+				start++
+				end++
+				barcodeNum++
 			}
 		}
-		for _, f := range bannedFunc {
-			for !f(debruijn[start:end]) {
+		for _, bannedFunction := range bannedFunctions {
+			// If the function returns False for the deBruijn range, iterate one base pair ahead. If the iteration reaches the end of the deBruijn sequence, close the channel and return the function.
+			for !bannedFunction(debruijn[start:end]) {
 				if end+1 > len(debruijn) {
-					close(c)
-					return
-				} else {
-					start++
-					end++
-					i++
+					return barcodes
 				}
+				start++
+				end++
+				barcodeNum++
 			}
 		}
-		c <- debruijn[start:end]
+		barcodes = append(barcodes, debruijn[start:end])
 	}
-	close(c)
+	return barcodes
 }
 
-// MakePrimers makes primers for a given sequence at a targetTm. It uses the default values from MeltingTemp
-func MakePrimers(sequence string, targetTm float64) (string, string) {
-	forwardPrimer := sequence[0:15]
-	for i := 0; MeltingTemp(forwardPrimer) < targetTm; i++ {
-		forwardPrimer = sequence[0 : 15+i]
-	}
-	reversePrimer := ReverseComplement(sequence[len(sequence)-15:])
-	for i := 0; MeltingTemp(reversePrimer) < targetTm; i++ {
-		reversePrimer = ReverseComplement(sequence[len(sequence)-(15+i):])
-	}
-	return forwardPrimer, reversePrimer
-}
-
-// AminoAcidMutation holds information for a given amino acid mutation. Indexing of positions starts at 1, as per convention
-type AminoAcidMutation struct {
-	StartPosition     int
-	EndPosition       int
-	InitialAminoAcids string
-	MutatedAminoAcids string
-}
-
-// NucleotideMutation holds information for a given nucleotide mutation. Indexing of positions starts at 1, as per convention
-type NucleotideMutation struct {
-	StartPosition      int
-	EndPosition        int
-	MutatedNucleotides string
-}
-
-// MakeNucleotideMutationPrimers takes a sequence and a given sequence context and generates primers to make a targeted mutation
-func MakeNucleotideMutationPrimers(sequence string, sequenceContext string, mutation NucleotideMutation, targetTm float64, overlap int) (string, string, error) {
-	// Check that StartPosition < EndPosition
-	if mutation.StartPosition > mutation.EndPosition {
-		return "", "", errors.New("StartPosition is greater than EndPosition in NucelotideMutation. StartPosition: " + strconv.Itoa(mutation.StartPosition) + " EndPosition: " + strconv.Itoa(mutation.EndPosition))
-	}
-
-	// Check that the overall length of the sequence is greater than EndPosition
-	if mutation.EndPosition > len(sequence) {
-		return "", "", errors.New("EndPosition is greater than length of sequence. EndPosition: " + strconv.Itoa(mutation.EndPosition) + " Sequence length: " + strconv.Itoa(len(sequence)))
-	}
-
-	// Check that sequence is within the sequenceContext
-	sequenceStart := strings.Index(sequenceContext, sequence)
-	if sequenceStart == -1 {
-		return "", "", errors.New("sequence is not a substring of sequenceContext")
-	}
-
-	// Index the "real" start and end position given the sequenceStart within the sequenceContext.
-	// Note: indexing of positions in Mutation notation begins at 1, so 1 is subtracted from the start
-	// and end positions
-	indexedStartPosition := sequenceStart + (mutation.StartPosition - 1)
-	indexedEndPosition := sequenceStart + (mutation.EndPosition - 1)
-
-	// Generate starter primers, in which nucleotide mutations can be added
-	seedPrimerFor, _ := MakePrimers(sequenceContext[indexedEndPosition:], targetTm)
-	_, seedPrimerRev := MakePrimers(sequenceContext[:indexedStartPosition], targetTm)
-
-	// To assemble properly, the fragments resulting from a PCR with these primers need a certain amount of overlap.
-	// This overlap will be the length of the mutation + a little homologous sequence on both ends.
-	var additionalForwardOverlap string
-	var additionalReverseOverlap string
-	additionalOverlap := overlap - len(mutation.MutatedNucleotides)
-	if additionalOverlap > 1 {
-		// Split overlap between forward and reverse
-		targetAdditionalOverlap := additionalOverlap / 2
-		additionalForwardOverlap = sequenceContext[indexedStartPosition-targetAdditionalOverlap : indexedStartPosition]
-		additionalReverseOverlap = ReverseComplement(sequenceContext[indexedEndPosition : indexedEndPosition+targetAdditionalOverlap])
-	}
-
-	// Generate final primers
-	primerFor := additionalForwardOverlap + mutation.MutatedNucleotides + seedPrimerFor
-	primerRev := additionalReverseOverlap + ReverseComplement(mutation.MutatedNucleotides) + seedPrimerRev
-
-	return primerFor, primerRev, nil
+// CreateBarcodes is a simplified version of CreateBarcodesWithBannedSequences with sane defaults.
+func CreateBarcodes(length int, maxSubSequence int) []string {
+	return CreateBarcodesWithBannedSequences(length, maxSubSequence, []string{}, []func(string) bool{})
 }

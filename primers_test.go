@@ -82,58 +82,46 @@ func TestMeltingTemp(t *testing.T) {
 	}
 }
 
-func ExampleDeBruijn() {
-	a := DeBruijn(4)
+func ExampleNucleobaseDeBruijnSequence() {
+	a := NucleobaseDeBruijnSequence(4)
 
 	fmt.Println(a)
 	// Output: AAAATAAAGAAACAATTAATGAATCAAGTAAGGAAGCAACTAACGAACCATATAGATACATTTATTGATTCATGTATGGATGCATCTATCGATCCAGAGACAGTTAGTGAGTCAGGTAGGGAGGCAGCTAGCGAGCCACACTTACTGACTCACGTACGGACGCACCTACCGACCCTTTTGTTTCTTGGTTGCTTCGTTCCTGTGTCTGGGTGGCTGCGTGCCTCTCGGTCGCTCCGTCCCGGGGCGGCCGCGCCCCAAA
 }
 
-func ExampleUniqueSequence() {
-	c := make(chan string)
-	go UniqueSequence(c, 20, 4, []string{"CTCTCGGTCGCTCC"}, []func(string) bool{})
-	var output string
-	for a := range c {
-		output = a
-	}
+func ExampleCreateBarcodesWithBannedSequences() {
+	barcodes := CreateBarcodesWithBannedSequences(20, 4, []string{"CTCTCGGTCGCTCC"}, []func(string) bool{})
 
-	fmt.Println(output)
-	// Output: TCTCGGTCGCTCCGTCCCGG
+	fmt.Println(barcodes[0])
+	// Output: AAAATAAAGAAACAATTAAT
 }
 
-func TestUniqueSequence(t *testing.T) {
-	c := make(chan string)
+func ExampleCreateBarcodes() {
+	barcodes := CreateBarcodes(20, 4)
+
+	fmt.Println(barcodes[0])
+	// Output: AAAATAAAGAAACAATTAAT
+}
+
+func TestCreateBarcode(t *testing.T) {
 	testFunc := func(s string) bool {
-		if strings.Contains(s, "GGCCGCGCCCC") {
-			return false
-		} else {
-			return true
-		}
+		return !strings.Contains(s, "GGCCGCGCCCC")
 	}
-	go UniqueSequence(c, 20, 4, []string{}, []func(string) bool{testFunc})
-	var output string
-	for a := range c {
-		output = a
-	}
+	barcodes := CreateBarcodesWithBannedSequences(20, 4, []string{}, []func(string) bool{testFunc})
+	output := barcodes[len(barcodes)-1]
 	if output != "CTCTCGGTCGCTCCGTCCCG" {
 		t.Errorf("TestUniqueSequence function should return CTCTCGGTCGCTCCGTCCCG. Got:\n%s", output)
 	}
 
-	b := make(chan string)
-	go UniqueSequence(b, 20, 4, []string{"GGCCGCGCCCC"}, []func(string) bool{})
-	for d := range b {
-		output = d
-	}
+	barcodes = CreateBarcodesWithBannedSequences(20, 4, []string{"GGCCGCGCCCC"}, []func(string) bool{})
+	output = barcodes[len(barcodes)-1]
 	if output != "CTCTCGGTCGCTCCGTCCCG" {
 		t.Errorf("TestUniqueSequence string should return CTCTCGGTCGCTCCGTCCCG. Got:\n%s", output)
 	}
-}
 
-func ExampleMakePrimers() {
-	sequenceString := "ATTAAGCATTCTGCCGACATGGAAGCCATCACAAACGGCATGATGAACCTGAATCGCCAGCGGCATCAGCACCTTGTCGCCTTGCGTATAATATTTGCCCATGGTGAAAACGGGGGCGAAGAAGTTGTCCATATTGGCCACGTTTAAATCAAAACTGGTGAAACTCACCCAGGGATTGGCTGAGACGAAAAACATATTCTCAATAAACCCTTTAGGGAAATAGGCCAGGTTTTCACCGTAACACGCCACATCTTGCGAATATATGTGTAGAAACTGCCGGAAATCGTCGTGGTATTCACTCCAGAGCGATGAAAACGTTTCAGTTTGCTCATGGAAAACGGTGTAACAAGGGTGAACACTATCCCATATCACCAGCTCACCGTCTTTCATTGCCATACGAAATTCCGGATGAGCATTCATCAGGCGGGCAAGAATGTGAATAAAGGCCGGATAAAACTTGTGCTTATTTTTCTTTACGGTCTTTAAAAAGGCC" // some random sequence from camR
-	targetTm := 55.0
-	forwardPrimer, reversePrimer := MakePrimers(sequenceString, targetTm)
-
-	fmt.Println(forwardPrimer, " ", reversePrimer)
-	// Output: ATTAAGCATTCTGCCGACATGG   GGCCTTTTTAAAGACCGTAAAGAAA
+	barcodes = CreateBarcodesWithBannedSequences(20, 4, []string{ReverseComplement("GGCCGCGCCCC")}, []func(string) bool{})
+	output = barcodes[len(barcodes)-1]
+	if output != "CTCTCGGTCGCTCCGTCCCG" {
+		t.Errorf("TestUniqueSequence string should return CTCTCGGTCGCTCCGTCCCG. Got:\n%s", output)
+	}
 }
